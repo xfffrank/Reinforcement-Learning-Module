@@ -83,24 +83,22 @@ class RBFModel(MountainCar):
         super().__init__(env)
 
     def construct_dataset(self):
-        flatten = self.q_table.flatten()
-        non_zero = 0
-        for q in flatten:
-            if q != 0:
-                non_zero += 1
-        data = np.zeros([non_zero, 4])
+        # flatten = self.q_table.flatten()
+        # non_zero = 0
+        # for q in flatten:
+        #     if q != 0:
+        #         non_zero += 1
+        data = np.zeros([self.num_of_states * self.num_of_states * self.env.action_space.n, 4])
         print('data shape:' ,data.shape)
         count = 0
         for i in range(self.q_table.shape[0]):
             for j in range(self.q_table.shape[1]):
-                for k in range(3):
-                    if self.q_table[i][j][k] != 0:
-                        data[count][0] = i
-                        data[count][1] = j
-                        data[count][2] = k
-                        data[count][3] = self.q_table[i][j][k]
-                        count += 1
-        self.count = count
+                for k in range(self.env.action_space.n):
+                    data[count][0] = i
+                    data[count][1] = j
+                    data[count][2] = k
+                    data[count][3] = self.q_table[i][j][k]
+                    count += 1
         # print('data shape:', data.shape)
         # print('data first 50:', data[0:50])
         X = data[:, :data.shape[1] - 1]
@@ -113,67 +111,44 @@ class RBFModel(MountainCar):
     def approximate(self):
         print('train...')
         self.train(epsilon=0.05)
-        # policy = np.argmax(self.q_table, axis=2)
-        # self.test(policy)
+        policy = np.argmax(self.q_table, axis=2)
+        self.test(policy)
         print('construct dataset from the learned policy...')
         X, y = self.construct_dataset()
+        features = X[:, :2]
+        actions = X[:, 2]
         print('construct design matrix...')
-        J = 20  # number of clusters
+        J = 4  # number of clusters
         print('clusters:', J)
-        U = self.gen_design_matrix(X, J)
-        # print(X[:6])
+        U = self.gen_design_matrix(features, J)
         print('sgd training...')
-        w0 = np.random.rand(J, 1)
+        w0 = np.random.rand(J, self.env.action_space.n)
         alpha = 0.001
-        max_iter = 50
+        max_iter = 10
         cost_hist = []
         for _ in range(max_iter):
-            for i, x in enumerate(U):
-                x = np.expand_dims(x, axis=0)
-                gd = self.gradient(w0, x, y[i])
-                w0 = w0 - alpha * gd
-                cost = self.cost_func(w0, U, y)
+            for i, u in enumerate(U):
+                u = np.expand_dims(u, axis=0)
+                gd = self.gradient(w0[:, int(actions[i])], u, y[i])
+                w0[:, int(actions[i])] = w0[:, int(actions[i])] - alpha * gd
+                cost = self.cost_func(w0[:, int(actions[i])], u, y[i])
                 cost_hist.append(cost)
         print('last 5 error:', cost_hist[-5:])
         plt.plot(cost_hist)
         plt.show()
-        y_rbf = np.dot(U, w0)
+        # y_rbf = np.dot(U, w0)
+        y_rbf = np.zeros(y.shape)
+        for i, u in enumerate(U):
+            y_rbf[i] = u.dot(w0[:, int(actions[i])])
         q_table_n = np.zeros(self.q_table.shape)
         count = 0
         for i in range(self.q_table.shape[0]):
             for j in range(self.q_table.shape[1]):
                 for k in range(3):
-                    if self.q_table[i][j][k] == 0:
-                        q_table_n[i][j][k] = 0
-                    else:
-                        q_table_n[i][j][k] = y_rbf[count]
-                        count += 1
-        assert count == self.count
-        # print('original q_table first 120:')
-        # print(self.q_table[0])
-        # print(q_table_n[0])
-        # print(X[:30])
-        # print(y[:30])
-        # print('predicted')
-        # print(y_rbf[:30])
+                    q_table_n[i][j][k] = y_rbf[count]
+                    count += 1
         policy_n = np.argmax(q_table_n, axis=2)
-        print(policy_n[:2])
-        print(np.argmax(self.q_table, axis=2)[:2])
         self.test(policy_n)
-        # print('true first 21:', y[:21])
-        # print('predicted first 21:', y_rbf[:21])
-        # print('true:\n', y[500:600])
-        # print('pred:\n', y_pred[500:600])
-        # new_policy = np.zeros([self.num_of_states, self.num_of_states])
-        # start_index = 0
-        # for i in range(self.num_of_states):
-        #     new_policy[i] = y_rbf[start_index:start_index + self.num_of_states]
-        #     start_index += self.num_of_states
-        # print('new policy shape:', new_policy.shape)
-        # print(y_rbf[200:300])
-        # print(y[200:300])
-        # print('run simulation...')
-        # self.test(new_policy)
           
     def gen_design_matrix(self, X, J):
         kmeans = KMeans(n_clusters=J, random_state=0).fit(X)
