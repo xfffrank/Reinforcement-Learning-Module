@@ -2,8 +2,22 @@ import gym
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
+import time
+
 
 np.random.seed(0)
+
+def timeit(func):
+    '''
+    A decorator which computes the time cost.
+    '''
+    def wrapper(*args, **kw):
+        start = time.time()
+        print('%s starts...' % (func.__name__))
+        res = func(*args, **kw)
+        print('%s completed: %.3f s' % (func.__name__, time.time() - start))
+        return res
+    return wrapper
 
 class MountainCar:
 
@@ -18,20 +32,21 @@ class MountainCar:
         self.max_iter = 8000
         self.env = env.unwrapped
         self.env.seed(0)
+        self._scaler()
         print('max_iter: %s, episodes: %s' % (self.max_iter, self.episodes))
 
-    def discretization(self, env, obs):
-        env_low = env.observation_space.low
-        env_high = env.observation_space.high
+    def _scaler(self):
+        env_low = self.env.observation_space.low
+        env_high = self.env.observation_space.high
         env_den = (env_high - env_low) / self.num_of_states
-        pos_den = env_den[0]
-        vel_den = env_den[1]
-        # pos_high = env_high[0]
-        pos_low = env_low[0]
-        # vel_high = env_high[1]
-        vel_low = env_low[1]
-        pos_scaled = int((obs[0] - pos_low) / pos_den)
-        vel_scaled = int((obs[1] - vel_low) / vel_den)
+        self.pos_den = env_den[0]
+        self.vel_den = env_den[1]
+        self.pos_low = env_low[0]
+        self.vel_low = env_low[1]
+
+    def discretization(self, obs):
+        pos_scaled = int((obs[0] - self.pos_low) / self.pos_den)
+        vel_scaled = int((obs[1] - self.vel_low) / self.vel_den)
         return pos_scaled, vel_scaled
 
     def train(self, epsilon):
@@ -178,7 +193,7 @@ class RBFModelTwo(MountainCar):
         # print(observation_examples.shape)
         # print(observation_examples[:2])
         for i in range(observation_examples.shape[0]):
-            pos_scaled, vel_scaled = self.discretization(self.env, observation_examples[i])
+            pos_scaled, vel_scaled = self.discretization(observation_examples[i])
             observation_examples[i] = np.array([pos_scaled, vel_scaled])
         # print(observation_examples[:2])
         kmeans = KMeans(n_clusters=self.num_of_clusters, random_state=0).fit(observation_examples)
@@ -187,9 +202,8 @@ class RBFModelTwo(MountainCar):
         print(self.clusters_centers.shape)
         del observation_examples
         
-
     def featuriser(self, observation):
-        pos_scaled, vel_scaled = self.discretization(self.env, observation)
+        pos_scaled, vel_scaled = self.discretization(observation)
         x = np.array([pos_scaled, vel_scaled])
         u = np.zeros([1, self.num_of_clusters])
         for i in range(self.num_of_clusters):
@@ -197,8 +211,11 @@ class RBFModelTwo(MountainCar):
             u[0][i] = np.exp(-np.square(temp / self.sigma))
         return u
 
-    def Q_value(self, w, state, action):
-        return state.dot(w[:, int(action)])
+    def Q_value(self, w, state, action=None):
+        if action == None:
+            return state.dot(w)
+        else:
+            return state.dot(w[:, int(action)])
 
     def greedy_policy(self, w, state, epsilon):
         if np.random.uniform(0, 1) < epsilon:
@@ -216,26 +233,24 @@ class RBFModelTwo(MountainCar):
     def train(self):
         print('Q learning; Approximation training[SGD]')
         w = np.zeros([self.num_of_clusters, self.env.action_space.n])
-        alpha = 0.001
-        for episode in range(10):
+        for episode in range(300):
             step = 0
             obs = self.env.reset()
-            alpha = max(self.min_lr, self.initial_lr * (self.gamma ** (episode // 100)))
-            for _ in range(1000):
+            # alpha = max(self.min_lr, self.initial_lr * (self.gamma ** (episode // 100)))
+            alpha = 0.02
+            while True:
                 step += 1
                 state = self.featuriser(obs)
                 action = self.greedy_policy(w, state, self.epsilon)
                 obs, reward, terminate, _ = self.env.step(action)
                 next_state = self.featuriser(obs)
-                next_Q_values = [self.Q_value(w, next_state, action) for action in range(self.env.action_space.n)]
+                next_Q_values = self.Q_value(w, next_state)
                 target = reward + self.gamma * np.max(next_Q_values)
                 dw = self.gradient(w[:, int(action)], state, target)
                 w[:, int(action)] -= alpha * dw
-                if terminate: 
-                    if episode % 2 == 0:
-                        print('episode:', episode)
-                        print('step:',step)
-                    break
+                if terminate: break
+            if episode % 20 == 0:
+                print('total steps:', step)
         self.w = w
     
     def test(self):
