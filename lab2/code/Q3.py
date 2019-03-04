@@ -18,7 +18,6 @@ class MountainCar:
         self.max_iter = 8000
         self.env = env.unwrapped
         self.env.seed(0)
-        np.random.seed(0)
         print('max_iter: %s, episodes: %s' % (self.max_iter, self.episodes))
 
     def discretization(self, env, obs):
@@ -77,17 +76,12 @@ class MountainCar:
                 break
 
 
-class RBFModel(MountainCar):
+class RBFModelOne(MountainCar):
     
     def __init__(self, env):
         super().__init__(env)
 
     def construct_dataset(self):
-        # flatten = self.q_table.flatten()
-        # non_zero = 0
-        # for q in flatten:
-        #     if q != 0:
-        #         non_zero += 1
         data = np.zeros([self.num_of_states * self.num_of_states * self.env.action_space.n, 4])
         print('data shape:' ,data.shape)
         count = 0
@@ -118,7 +112,7 @@ class RBFModel(MountainCar):
         features = X[:, :2]
         actions = X[:, 2]
         print('construct design matrix...')
-        J = 4  # number of clusters
+        J = 5  # number of clusters
         print('clusters:', J)
         U = self.gen_design_matrix(features, J)
         print('sgd training...')
@@ -172,18 +166,109 @@ class RBFModel(MountainCar):
         return np.square(y - X.dot(w)).mean() / 2
 
 
+class RBFModelTwo(MountainCar):
 
-def main():
+    def __init__(self, env, num_of_clusters=20, epsilon=0.05):
+        super().__init__(env)
+        self.num_of_clusters = num_of_clusters
+        self.epsilon = epsilon
+        print('construct transformer for features...')
+        observation_examples = np.array(
+            [self.env.observation_space.sample() for x in range(10000)])
+        # print(observation_examples.shape)
+        # print(observation_examples[:2])
+        for i in range(observation_examples.shape[0]):
+            pos_scaled, vel_scaled = self.discretization(self.env, observation_examples[i])
+            observation_examples[i] = np.array([pos_scaled, vel_scaled])
+        # print(observation_examples[:2])
+        kmeans = KMeans(n_clusters=self.num_of_clusters, random_state=0).fit(observation_examples)
+        self.sigma = np.std(observation_examples)
+        self.clusters_centers = kmeans.cluster_centers_
+        print(self.clusters_centers.shape)
+        del observation_examples
+        
+
+    def featuriser(self, observation):
+        pos_scaled, vel_scaled = self.discretization(self.env, observation)
+        x = np.array([pos_scaled, vel_scaled])
+        u = np.zeros([1, self.num_of_clusters])
+        for i in range(self.num_of_clusters):
+            temp = np.linalg.norm(x - self.clusters_centers[i])
+            u[0][i] = np.exp(-np.square(temp / self.sigma))
+        return u
+
+    def Q_value(self, w, state, action):
+        return state.dot(w[:, int(action)])
+
+    def greedy_policy(self, w, state, epsilon):
+        if np.random.uniform(0, 1) < epsilon:
+            return np.random.choice(self.env.action_space.n)
+        else:
+            return np.argmax([self.Q_value(w, state, action) for action in range(self.env.action_space.n)])
+
+    def learned_policy(self, w, state):
+        return np.argmax([self.Q_value(w, state, action) for action in range(self.env.action_space.n)])
+
+    def gradient(self, w, X, y):
+        m = len(X)
+        return (- 1 / m) * (X.T.dot(y - X.dot(w)))
+
+    def train(self):
+        print('Q learning; Approximation training[SGD]')
+        w = np.zeros([self.num_of_clusters, self.env.action_space.n])
+        alpha = 0.001
+        for episode in range(10):
+            step = 0
+            obs = self.env.reset()
+            alpha = max(self.min_lr, self.initial_lr * (self.gamma ** (episode // 100)))
+            for _ in range(1000):
+                step += 1
+                state = self.featuriser(obs)
+                action = self.greedy_policy(w, state, self.epsilon)
+                obs, reward, terminate, _ = self.env.step(action)
+                next_state = self.featuriser(obs)
+                next_Q_values = [self.Q_value(w, next_state, action) for action in range(self.env.action_space.n)]
+                target = reward + self.gamma * np.max(next_Q_values)
+                dw = self.gradient(w[:, int(action)], state, target)
+                w[:, int(action)] -= alpha * dw
+                if terminate: 
+                    if episode % 2 == 0:
+                        print('episode:', episode)
+                        print('step:',step)
+                    break
+        self.w = w
+    
+    def test(self):
+        print('testing...')
+        obs = self.env.reset()
+        while True:
+            self.env.render()
+            state = self.featuriser(obs)
+            action = self.learned_policy(self.w, state)
+            obs, reward, terminate, _ = self.env.step(action)
+            if terminate:
+                break
+        
+
+    
+    
+
+
+def test_model_one():
     env = gym.make('MountainCar-v0')
-    p = RBFModel(env)
+    p = RBFModelOne(env)
     p.approximate()
     env.close()
 
+def test_model_two():
+    env = gym.make('MountainCar-v0')
+    model = RBFModelTwo(env)
+    model.train()
+    model.test()
+    env.close()
+    
+
 
 if __name__ == "__main__":
-    main()
-    # env = gym.make('MountainCar-v0')
-    # p = MountainCar(env)
-    # p.train(0.05)
-    # p.test()
-    # env.close()
+    # test_model_one()
+    test_model_two()
