@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 import time
+import sys
 
 
 np.random.seed(0)
@@ -60,7 +61,7 @@ class MountainCar:
             alpha = max(self.min_lr, self.initial_lr * (self.gamma ** (episode // 100)))
             #iter_count = 0
             for i in range(self.max_iter):
-                pos, vel = self.discretization(self.env, obs)
+                pos, vel = self.discretization(obs)
                 if np.random.uniform(low=0, high=1) < epsilon:
                     # exploration
                     a = np.random.choice(self.env.action_space.n)
@@ -69,7 +70,7 @@ class MountainCar:
                     a = np.argmax(q_table[pos][vel])
                 obs, reward, terminate, _ = self.env.step(a)
                 total_reward += abs(obs[0]+0.5)
-                pos_, vel_ = self.discretization(self.env, obs)
+                pos_, vel_ = self.discretization(obs)
                 q_table[pos][vel][a] = (1 - alpha) * q_table[pos][vel][a] + alpha * (reward + self.gamma * np.max(q_table[pos_][vel_]))
                 # update the sum of the action values
                 Q_curr += q_table[pos][vel][a]
@@ -84,7 +85,7 @@ class MountainCar:
         obs = self.env.reset()
         while True:
             self.env.render()
-            pos, vel = self.discretization(self.env, obs)
+            pos, vel = self.discretization(obs)
             a = policy[pos][vel] # ensure the action is an integer
             obs, reward, terminate,_ = self.env.step(a)
             if terminate: 
@@ -97,58 +98,57 @@ class RBFModelOne(MountainCar):
         super().__init__(env)
 
     def construct_dataset(self):
-        data = np.zeros([self.num_of_states * self.num_of_states * self.env.action_space.n, 4])
-        print('data shape:' ,data.shape)
-        count = 0
+        features = np.zeros([self.num_of_states * self.num_of_states, 2])
+        y = []
+        c_f = 0  # count of features
         for i in range(self.q_table.shape[0]):
             for j in range(self.q_table.shape[1]):
+                features[c_f] = np.array([i, j])
+                c_f += 1
                 for k in range(self.env.action_space.n):
-                    data[count][0] = i
-                    data[count][1] = j
-                    data[count][2] = k
-                    data[count][3] = self.q_table[i][j][k]
-                    count += 1
-        # print('data shape:', data.shape)
-        # print('data first 50:', data[0:50])
-        X = data[:, :data.shape[1] - 1]
-        y = np.expand_dims(data[:, data.shape[1] - 1], axis=1)
-        # print(self.solution_policy[25][3])
-        print('X shape:', X.shape)
+                    y.append(self.q_table[i][j][k])
+        assert c_f == self.num_of_states * self.num_of_states
+        y = np.expand_dims(np.array(y), axis=1)
+        print('feature shape:', features.shape)
         print('y shape:', y.shape)
-        return X, y
+        return features, y
 
     def approximate(self):
         print('train...')
         self.train(epsilon=0.05)
-        policy = np.argmax(self.q_table, axis=2)
-        self.test(policy)
+        y_true = self.q_table.reshape([self.num_of_states * self.num_of_states, 3])
+        print('y_true shape:', y_true.shape)
         print('construct dataset from the learned policy...')
-        X, y = self.construct_dataset()
-        features = X[:, :2]
-        actions = X[:, 2]
-        print('construct design matrix...')
-        J = 5  # number of clusters
+        features, y= self.construct_dataset()
+        print('construct design matrix for sgd...')
+        J = 10  # number of clusters
         print('clusters:', J)
         U = self.gen_design_matrix(features, J)
-        print('sgd training...')
+        print('sgd training starts...')
         w0 = np.random.rand(J, self.env.action_space.n)
         alpha = 0.001
         max_iter = 10
         cost_hist = []
         for _ in range(max_iter):
+            c = 0  # count of y array, reset for every episode
             for i, u in enumerate(U):
                 u = np.expand_dims(u, axis=0)
-                gd = self.gradient(w0[:, int(actions[i])], u, y[i])
-                w0[:, int(actions[i])] = w0[:, int(actions[i])] - alpha * gd
-                cost = self.cost_func(w0[:, int(actions[i])], u, y[i])
-                cost_hist.append(cost)
+                for action in range(self.env.action_space.n):
+                    gd = self.gradient(w0[:, action], u, y[c])
+                    c += 1
+                    w0[:, action] = w0[:, action]  - alpha * gd
+                    cost = self.cost_func(w0, U, y_true)
+                    cost_hist.append(cost)
         print('last 5 error:', cost_hist[-5:])
         plt.plot(cost_hist)
         plt.show()
-        # y_rbf = np.dot(U, w0)
+        # y_rbf = np.dot(U, w0).reshape(-1)
+        # print("y_rbf shape:", y_rbf.shape)
         y_rbf = np.zeros(y.shape)
+        c = 0
         for i, u in enumerate(U):
-            y_rbf[i] = u.dot(w0[:, int(actions[i])])
+            for action in range(self.env.action_space.n):
+                y_rbf[c] = u.dot(w0[:, action])
         q_table_n = np.zeros(self.q_table.shape)
         count = 0
         for i in range(self.q_table.shape[0]):
@@ -178,7 +178,8 @@ class RBFModelOne(MountainCar):
 
     def cost_func(self, w, X, y):
         # mean square error
-        return np.square(y - X.dot(w)).mean() / 2
+        y_pred = X.dot(w)
+        return np.square(y - y_pred).mean() / 2
 
 
 class RBFModelTwo(MountainCar):
@@ -190,12 +191,9 @@ class RBFModelTwo(MountainCar):
         print('construct transformer for features...')
         observation_examples = np.array(
             [self.env.observation_space.sample() for x in range(10000)])
-        # print(observation_examples.shape)
-        # print(observation_examples[:2])
         for i in range(observation_examples.shape[0]):
             pos_scaled, vel_scaled = self.discretization(observation_examples[i])
             observation_examples[i] = np.array([pos_scaled, vel_scaled])
-        # print(observation_examples[:2])
         kmeans = KMeans(n_clusters=self.num_of_clusters, random_state=0).fit(observation_examples)
         self.sigma = np.std(observation_examples)
         self.clusters_centers = kmeans.cluster_centers_
@@ -230,13 +228,15 @@ class RBFModelTwo(MountainCar):
         m = len(X)
         return (- 1 / m) * (X.T.dot(y - X.dot(w)))
 
+    @timeit
     def train(self):
         print('Q learning; Approximation training[SGD]')
         w = np.zeros([self.num_of_clusters, self.env.action_space.n])
-        for episode in range(300):
+        num_of_episodes = 300
+        print('number of episodes:', num_of_episodes)
+        for episode in range(num_of_episodes):
             step = 0
             obs = self.env.reset()
-            # alpha = max(self.min_lr, self.initial_lr * (self.gamma ** (episode // 100)))
             alpha = 0.02
             while True:
                 step += 1
@@ -250,7 +250,7 @@ class RBFModelTwo(MountainCar):
                 w[:, int(action)] -= alpha * dw
                 if terminate: break
             if episode % 20 == 0:
-                print('total steps:', step)
+                print('episode: %s, total steps: %s' % (episode, step))
         self.w = w
     
     def test(self):
@@ -263,9 +263,6 @@ class RBFModelTwo(MountainCar):
             obs, reward, terminate, _ = self.env.step(action)
             if terminate:
                 break
-        
-
-    
     
 
 
@@ -285,5 +282,7 @@ def test_model_two():
 
 
 if __name__ == "__main__":
-    # test_model_one()
-    test_model_two()
+    if sys.argv[1] == '3.1':
+        test_model_one()
+    elif sys.argv[1] == '3.2':
+        test_model_two()
