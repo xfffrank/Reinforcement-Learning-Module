@@ -132,9 +132,10 @@ class RBFModelOne(MountainCar):
         # J = 10  # number of clusters
         # print('clusters:', J)
         mse_loss_hist = []
-        for J in range(5, 6):
+        max_J = 21
+        for J in range(20, max_J):
             U = self.gen_design_matrix(features, J)
-            print('sgd training starts...')
+            # print('sgd training starts...')
             w0 = self.train_tabular(U, J, actions, y)
             # y_rbf = np.dot(U, w0).reshape(-1)
             # print("y_rbf shape:", y_rbf.shape)
@@ -144,7 +145,9 @@ class RBFModelOne(MountainCar):
             mse_loss = np.square(y - y_rbf).mean() / 2
             mse_loss_hist.append(mse_loss)
             if J % 2 == 0:
-                print('process: %s/20' % (J))
+                print('process: %s/%s' % (J, max_J))
+        plt.xlabel('the number of basis functions')
+        plt.ylabel('mean square error')
         plt.plot(mse_loss_hist)
         plt.show()
         # print('mse loss:', mse_loss)
@@ -190,7 +193,7 @@ class RBFModelOne(MountainCar):
             for j in range(J):
                 u = np.linalg.norm(X[i] - kmeans.cluster_centers_[j])
                 U[i][j] = np.exp(- np.square(u / sigma))
-        print('design matrix shape:', U.shape)
+        # print('design matrix shape:', U.shape)
         return U
 
     def gradient(self, w, X, y):
@@ -204,7 +207,7 @@ class RBFModelOne(MountainCar):
 
 
 class RBFModelTwo(MountainCar):
-
+    
     def __init__(self, env, num_of_clusters=20, epsilon=0.05):
         super().__init__(env)
         self.num_of_clusters = num_of_clusters
@@ -253,7 +256,7 @@ class RBFModelTwo(MountainCar):
         return (- 1 / m) * (X.T.dot(y - X.dot(w)))
 
     @timeit
-    def train(self):
+    def train_Qlearning(self):
         print('Q learning; Approximation training[SGD]')
         w = np.zeros([self.num_of_clusters, self.env.action_space.n])
         num_of_episodes = 100
@@ -275,6 +278,38 @@ class RBFModelTwo(MountainCar):
                 state = next_state
                 if terminate: 
                     break
+            if episode % 20 == 0:
+                print('episode: %s, total steps: %s' % (episode, step))
+        self.w = w
+
+    @timeit
+    def train_sarsa(self):
+        print('Q learning; Approximation training[SGD]')
+        w = np.zeros([self.num_of_clusters, self.env.action_space.n])
+        num_of_episodes = 100
+        print('number of episodes:', num_of_episodes)
+        for episode in range(num_of_episodes):
+            step = 0
+            obs = self.env.reset()
+            state = self.featuriser(obs)
+            action = self.greedy_policy(w, state, self.epsilon)
+            alpha = 0.02
+            while True:
+                step += 1
+                obs, reward, terminate, _ = self.env.step(action)
+                if terminate:
+                    target = reward
+                    dw = self.gradient(w[:, int(action)], state, target)
+                    w[:, int(action)] -= alpha * dw
+                    break
+                next_state = self.featuriser(obs)
+                next_action = self.greedy_policy(w, next_state, self.epsilon)
+                next_Q_value = self.Q_value(w, next_state, int(next_action))
+                target = reward + self.gamma * next_Q_value
+                dw = self.gradient(w[:, int(action)], state, target)
+                w[:, int(action)] -= alpha * dw
+                state = next_state
+                action = next_action
             if episode % 20 == 0:
                 print('episode: %s, total steps: %s' % (episode, step))
         self.w = w
@@ -304,7 +339,8 @@ def test_model_one():
 def test_model_two():
     env = gym.make('MountainCar-v0')
     model = RBFModelTwo(env)
-    model.train()
+    model.train_Qlearning()
+    # model.train_sarsa()
     model.test()
     env.close()
     
