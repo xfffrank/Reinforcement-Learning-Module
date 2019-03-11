@@ -18,14 +18,13 @@ yh_lin = X * w
 # plt.show()
 # J = 20basis functions obtained by k-means clustering
 # sigma set to standard deviation of entire data
-J = 15
+J = 50
 print('clusters:', J)
 kmeans = KMeans(n_clusters=J, random_state=0).fit(X)
 print('kmeans.cluster_centers shape', kmeans.cluster_centers_.shape)
 sigma = np.std(X)
 # sigma = np.std(kmeans.cluster_centers_, axis=1)
 # print('sigma shape:', sigma.shape)
-
 # Construct design matrix
 U = np.zeros((N,J))
 for i in range(N):
@@ -48,7 +47,7 @@ def cost_func(w, X, y):
 np.random.seed(0)
 w0 = np.random.rand(J, 1)   # initialize w0
 
-alpha = 0.005
+alpha = 0.0005
 max_iter = 50
 cost_hist = []
 for _ in range(max_iter):
@@ -62,6 +61,7 @@ for _ in range(max_iter):
 plt.plot(cost_hist)
 plt.ylabel('mean square error')
 plt.xlabel('iterations')
+plt.title('Basis functions: %s; learning rate: %s' % (J, alpha))
 plt.show()
 yh_rbf = np.dot(U, w0)
 # print(np.square(y - yh_rbf).mean())
